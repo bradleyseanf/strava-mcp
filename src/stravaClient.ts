@@ -9,17 +9,9 @@ export const stravaApi = axios.create({
 
 // Add a request interceptor (can be used for logging or modifying requests)
 stravaApi.interceptors.request.use(config => {
-    // REMOVE DEBUG LOGS - Interfere with MCP Stdio transport
-    // let authHeaderLog = 'Not Set';
-    // const authHeaderValue = config.headers?.Authorization;
-    // if (typeof authHeaderValue === 'string') {
-    //     authHeaderLog = `${authHeaderValue.substring(0, 12)}...[REDACTED]`;
-    // }
-    // console.error(`[DEBUG stravaClient] Sending Request: ${config.method?.toUpperCase()} ${config.url}`);
-    // console.error(`[DEBUG stravaClient] Authorization Header: ${authHeaderLog}` );
     return config;
 }, error => {
-    console.error('[DEBUG stravaClient] Request Error Interceptor:', error);
+    console.error('[StravaClient] Request interceptor failed.');
     return Promise.reject(error);
 });
 // ----------------------------------
@@ -346,7 +338,6 @@ async function refreshAccessToken(): Promise<string> {
     }
 
     try {
-        console.error('🔄 Refreshing Strava access token...');
         const response = await axios.post('https://www.strava.com/oauth/token', {
             client_id: clientId,
             client_secret: clientSecret,
@@ -366,10 +357,9 @@ async function refreshAccessToken(): Promise<string> {
         // Update tokens in config file and process.env
         await updateTokens(newAccessToken, newRefreshToken, expiresAt);
 
-        console.error(`✅ Token refreshed. New token expires: ${new Date(expiresAt * 1000).toLocaleString()}`);
         return newAccessToken;
     } catch (error) {
-        console.error('Failed to refresh access token:', error);
+        console.error('Failed to refresh Strava access token.');
         throw new Error(`Failed to refresh Strava access token: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
@@ -385,21 +375,17 @@ export async function handleApiError<T>(error: unknown, context: string, retryFn
     // Check if it's an authentication error (401) that might be fixed by refreshing the token
     if (axios.isAxiosError(error) && error.response?.status === 401 && retryFn) {
         try {
-            console.error(`🔑 Authentication error in ${context}. Attempting to refresh token...`);
             await refreshAccessToken();
-
-            // Return the result of the retry function if it succeeds
-            console.error(`🔄 Retrying ${context} after token refresh...`);
             return await retryFn();
         } catch (refreshError) {
-            console.error(`❌ Token refresh failed: ${refreshError instanceof Error ? refreshError.message : String(refreshError)}`);
+            console.error(`Token refresh failed in ${context}.`);
             // Fall through to normal error handling if refresh fails
         }
     }
 
     // Check for subscription error (402)
     if (axios.isAxiosError(error) && error.response?.status === 402) {
-        console.error(`🔒 Subscription Required in ${context}. Status: 402`);
+        console.error(`Subscription required in ${context}.`);
         // Throw a specific error type or use a unique message
         throw new Error(`SUBSCRIPTION_REQUIRED: Access to this feature requires a Strava subscription. Context: ${context}`);
     }
@@ -411,17 +397,13 @@ export async function handleApiError<T>(error: unknown, context: string, retryFn
         const message = (typeof responseData === 'object' && responseData !== null && 'message' in responseData && typeof responseData.message === 'string')
             ? responseData.message
             : error.message;
-        console.error(`Strava API request failed in ${context} with status ${status}: ${message}`);
-        // Include response data in error log if helpful (be careful with sensitive data)
-        if (responseData) {
-            console.error(`Response data (${context}):`, JSON.stringify(responseData, null, 2));
-        }
+        console.error(`Strava API request failed in ${context} with status ${status}.`);
         throw new Error(`Strava API Error in ${context} (${status}): ${message}`);
     } else if (error instanceof Error) {
-        console.error(`An unexpected error occurred in ${context}:`, error);
+        console.error(`Unexpected error in ${context}.`);
         throw new Error(`An unexpected error occurred in ${context}: ${error.message}`);
     } else {
-        console.error(`An unknown error object was caught in ${context}:`, error);
+        console.error(`Unknown error in ${context}.`);
         throw new Error(`An unknown error occurred in ${context}: ${String(error)}`);
     }
 }
@@ -573,9 +555,7 @@ export async function getAuthenticatedAthlete(accessToken: string): Promise<Stra
         const validationResult = DetailedAthleteSchema.safeParse(response.data);
 
         if (!validationResult.success) {
-            // Log the raw response data on validation failure for debugging
-            console.error("Strava API raw response data (getAuthenticatedAthlete):", JSON.stringify(response.data, null, 2));
-            console.error("Strava API response validation failed (getAuthenticatedAthlete):", validationResult.error);
+            console.error("Strava API response validation failed (getAuthenticatedAthlete).");
             throw new Error(`Invalid data format received from Strava API: ${validationResult.error.message}`);
         }
         // Type assertion is safe here due to successful validation

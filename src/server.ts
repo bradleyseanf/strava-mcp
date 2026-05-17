@@ -1,285 +1,328 @@
 #!/usr/bin/env node
+import dotenv from "dotenv";
+import express from "express";
+import cookieParser from "cookie-parser";
+import helmet from "helmet";
+import { rateLimit } from "express-rate-limit";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import * as dotenv from "dotenv";
-import path from "path";
-import { fileURLToPath } from "url";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
+import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
+import { loadConfig, saveConfig } from "./config.js";
+import { registerStravaTools } from "./mcpTools.js";
+import { loadRuntimeConfig, assertHttpsPublicUrl } from "./runtime.js";
+import { PersonalOAuthProvider } from "./auth/provider.js";
+import {
+    chatgptLoginErrorPage,
+    chatgptLoginPage,
+} from "./auth/pages.js";
+import {
+    createSessionCookie,
+    verifySessionCookie,
+} from "./auth/session.js";
 import { getServerInfo, SERVER_NAME } from "./serverInfo.js";
 
-// Import all tool definitions with the correct names
-import { getAthleteProfile } from './tools/getAthleteProfile.js';
-import { getAthleteStatsTool } from "./tools/getAthleteStats.js";
-import { getActivityDetailsTool } from "./tools/getActivityDetails.js";
-import { getRecentActivities } from "./tools/getRecentActivities.js";
-import { listAthleteClubs } from './tools/listAthleteClubs.js';
-import { listStarredSegments } from './tools/listStarredSegments.js';
-import { getSegmentTool } from "./tools/getSegment.js";
-import { exploreSegments } from './tools/exploreSegments.js';
-import { starSegment } from './tools/starSegment.js';
-import { getSegmentEffortTool } from './tools/getSegmentEffort.js';
-import { listSegmentEffortsTool } from './tools/listSegmentEfforts.js';
-import { listAthleteRoutesTool } from './tools/listAthleteRoutes.js';
-import { getRouteTool } from './tools/getRoute.js';
-import { exportRouteGpx } from './tools/exportRouteGpx.js';
-import { exportRouteTcx } from './tools/exportRouteTcx.js';
-import { getActivityStreamsTool } from './tools/getActivityStreams.js';
-import { getActivityLapsTool } from './tools/getActivityLaps.js';
-import { getAthleteZonesTool } from './tools/getAthleteZones.js';
-import { getAthleteShoesTool } from './tools/getAthleteShoes.js';
-import { getAllActivities } from './tools/getAllActivities.js';
-import { getActivityPhotosTool } from './tools/getActivityPhotos.js';
-import { getServerVersionTool } from "./tools/getServerVersion.js";
-import { connectStravaTool, disconnectStravaTool, checkStravaConnectionTool } from './tools/connectStrava.js';
-import { getSegmentLeaderboardTool } from './tools/getSegmentLeaderboard.js';
-import { loadConfig } from './config.js';
+dotenv.config();
 
-// Import the actual client function
-// import {
-//     // exportRouteGpx as exportRouteGpxClient, // Removed unused alias
-//     // exportRouteTcx as exportRouteTcxClient, // Removed unused alias
-//     getActivityLaps as getActivityLapsClient
-// } from './stravaClient.js';
-
-// Load .env file explicitly from project root
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const projectRoot = path.resolve(__dirname, '..');
-const envPath = path.join(projectRoot, '.env');
-// REMOVE THIS DEBUG LOG - Interferes with MCP Stdio transport
-// console.log(`[DEBUG] Attempting to load .env file from: ${envPath}`);
-dotenv.config({ path: envPath });
-
-const { version: serverVersion } = getServerInfo();
-
-const server = new McpServer({
-    name: SERVER_NAME,
-    version: serverVersion
+const SESSION_COOKIE_NAME = "strava_mcp_session";
+const SESSION_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+const MCP_SCOPES = ["mcp:tools"];
+const LOGIN_RATE_LIMIT = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+const MCP_RATE_LIMIT = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 300,
+    standardHeaders: true,
+    legacyHeaders: false,
 });
 
-// Register all tools using server.tool and the correct imported objects
-server.tool(
-    getAthleteProfile.name,
-    getAthleteProfile.description,
-    {},
-    getAthleteProfile.execute
-);
-server.tool(
-    getAthleteStatsTool.name, 
-    getAthleteStatsTool.description,
-    getAthleteStatsTool.inputSchema?.shape ?? {},
-    getAthleteStatsTool.execute
-);
-server.tool(
-    getActivityDetailsTool.name, 
-    getActivityDetailsTool.description,
-    getActivityDetailsTool.inputSchema?.shape ?? {},
-    getActivityDetailsTool.execute
-);
-server.tool(
-    getRecentActivities.name,
-    getRecentActivities.description,
-    getRecentActivities.inputSchema?.shape ?? {},
-    getRecentActivities.execute
-);
-server.tool(
-    listAthleteClubs.name,
-    listAthleteClubs.description,
-    {},
-    listAthleteClubs.execute
-);
-server.tool(
-    listStarredSegments.name,
-    listStarredSegments.description,
-    {},
-    listStarredSegments.execute
-);
-server.tool(
-    getSegmentTool.name, 
-    getSegmentTool.description,
-    getSegmentTool.inputSchema?.shape ?? {},
-    getSegmentTool.execute
-);
-server.tool(
-    exploreSegments.name,
-    exploreSegments.description,
-    exploreSegments.inputSchema?.shape ?? {},
-    exploreSegments.execute
-);
-server.tool(
-    starSegment.name,
-    starSegment.description,
-    starSegment.inputSchema?.shape ?? {},
-    starSegment.execute
-);
-server.tool(
-    getSegmentEffortTool.name, 
-    getSegmentEffortTool.description,
-    getSegmentEffortTool.inputSchema?.shape ?? {},
-    getSegmentEffortTool.execute
-);
-server.tool(
-    listSegmentEffortsTool.name, 
-    listSegmentEffortsTool.description,
-    listSegmentEffortsTool.inputSchema?.shape ?? {},
-    listSegmentEffortsTool.execute
-);
-server.tool(
-    listAthleteRoutesTool.name, 
-    listAthleteRoutesTool.description,
-    listAthleteRoutesTool.inputSchema?.shape ?? {},
-    listAthleteRoutesTool.execute
-);
-server.tool(
-    getRouteTool.name,
-    getRouteTool.description,
-    getRouteTool.inputSchema?.shape ?? {},
-    getRouteTool.execute
-);
-server.tool(
-    exportRouteGpx.name,
-    exportRouteGpx.description,
-    exportRouteGpx.inputSchema?.shape ?? {},
-    exportRouteGpx.execute
-);
-server.tool(
-    exportRouteTcx.name,
-    exportRouteTcx.description,
-    exportRouteTcx.inputSchema?.shape ?? {},
-    exportRouteTcx.execute
-);
-server.tool(
-    getActivityStreamsTool.name,
-    getActivityStreamsTool.description,
-    getActivityStreamsTool.inputSchema?.shape ?? {},
-    getActivityStreamsTool.execute
-);
+type LoginFormInput = {
+    requestId?: string;
+    email?: string;
+    password?: string;
+};
 
-// --- Register get-activity-laps tool (Simplified) ---
-server.tool(
-    getActivityLapsTool.name, 
-    getActivityLapsTool.description,
-    getActivityLapsTool.inputSchema?.shape ?? {},
-    getActivityLapsTool.execute
-);
+function buildMcpServer(version: string, includeAdminTools: boolean): McpServer {
+    const server = new McpServer({
+        name: SERVER_NAME,
+        version,
+    });
 
-// --- Register get-athlete-zones tool ---
-server.tool(
-    getAthleteZonesTool.name, 
-    getAthleteZonesTool.description,
-    getAthleteZonesTool.inputSchema?.shape ?? {},
-    getAthleteZonesTool.execute
-);
-
-// --- Register get-athlete-shoes tool ---
-server.tool(
-    getAthleteShoesTool.name,
-    getAthleteShoesTool.description,
-    {},
-    getAthleteShoesTool.execute
-);
-
-// --- Register get-all-activities tool ---
-server.tool(
-    getAllActivities.name,
-    getAllActivities.description,
-    getAllActivities.inputSchema?.shape ?? {},
-    getAllActivities.execute
-);
-
-// --- Register get-activity-photos tool ---
-server.tool(
-    getActivityPhotosTool.name,
-    getActivityPhotosTool.description,
-    getActivityPhotosTool.inputSchema?.shape ?? {},
-    getActivityPhotosTool.execute
-);
-
-// --- Register get-server-version tool ---
-server.tool(
-    getServerVersionTool.name,
-    getServerVersionTool.description,
-    {},
-    getServerVersionTool.execute
-);
-
-// --- Register Strava connection tools ---
-server.tool(
-    connectStravaTool.name,
-    connectStravaTool.description,
-    connectStravaTool.inputSchema?.shape ?? {},
-    connectStravaTool.execute
-);
-server.tool(
-    disconnectStravaTool.name,
-    disconnectStravaTool.description,
-    {},
-    disconnectStravaTool.execute
-);
-server.tool(
-    checkStravaConnectionTool.name,
-    checkStravaConnectionTool.description,
-    {},
-    checkStravaConnectionTool.execute
-);
-
-// --- Register segment leaderboard tool ---
-server.tool(
-    getSegmentLeaderboardTool.name,
-    getSegmentLeaderboardTool.description,
-    getSegmentLeaderboardTool.inputSchema?.shape ?? {},
-    getSegmentLeaderboardTool.execute
-);
-
-// --- Helper Functions ---
-// Moving formatDuration to utils or keeping it here if broadly used.
-// For now, it's imported by getActivityLaps.ts
-export function formatDuration(seconds: number): string {
-    if (isNaN(seconds) || seconds < 0) {
-        return 'N/A';
-    }
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = Math.floor(seconds % 60);
-
-    const parts: string[] = [];
-    if (hours > 0) {
-        parts.push(hours.toString().padStart(2, '0'));
-    }
-    parts.push(minutes.toString().padStart(2, '0'));
-    parts.push(secs.toString().padStart(2, '0'));
-
-    return parts.join(':');
+    registerStravaTools(server, { includeAdminTools });
+    return server;
 }
 
-// Removed other formatters - they are now local to their respective tools.
+function applyBootstrappedStravaEnv(config: Awaited<ReturnType<typeof loadConfig>>): void {
+    if (config.clientId && !process.env.STRAVA_CLIENT_ID) {
+        process.env.STRAVA_CLIENT_ID = config.clientId;
+    }
+    if (config.clientSecret && !process.env.STRAVA_CLIENT_SECRET) {
+        process.env.STRAVA_CLIENT_SECRET = config.clientSecret;
+    }
+    if (config.accessToken && !process.env.STRAVA_ACCESS_TOKEN) {
+        process.env.STRAVA_ACCESS_TOKEN = config.accessToken;
+    }
+    if (config.refreshToken && !process.env.STRAVA_REFRESH_TOKEN) {
+        process.env.STRAVA_REFRESH_TOKEN = config.refreshToken;
+    }
+}
 
-// --- Server Startup ---
-async function startServer() {
-  try {
-        console.error(`Starting ${SERVER_NAME} v${serverVersion}...`);
-        
-        // Load config from ~/.config/strava-mcp/ and merge with env vars
-        const config = await loadConfig();
-        if (config.accessToken && !process.env.STRAVA_ACCESS_TOKEN) {
-            process.env.STRAVA_ACCESS_TOKEN = config.accessToken;
+async function persistBootstrapConfig(config: Awaited<ReturnType<typeof loadRuntimeConfig>>): Promise<void> {
+    const bootstrapConfig = {
+        clientId: config.stravaClientId,
+        clientSecret: config.stravaClientSecret,
+        accessToken: config.stravaAccessToken,
+        refreshToken: config.stravaRefreshToken,
+    };
+    if (
+        bootstrapConfig.clientId ||
+        bootstrapConfig.clientSecret ||
+        bootstrapConfig.accessToken ||
+        bootstrapConfig.refreshToken
+    ) {
+        await saveConfig(bootstrapConfig);
+    }
+}
+
+function routePath(basePath: string, suffix: string): string {
+    const cleanBase = basePath.replace(/\/+$/, "");
+    const cleanSuffix = suffix.startsWith("/") ? suffix : `/${suffix}`;
+    return `${cleanBase}${cleanSuffix}` || cleanSuffix;
+}
+
+function renderLoginForRequest(
+    requestId: string,
+    allowedEmail: string,
+    error?: string,
+): string {
+    return chatgptLoginPage({
+        requestId,
+        allowedEmail,
+        error,
+    });
+}
+
+async function startRemoteServer(
+    runtime: Awaited<ReturnType<typeof loadRuntimeConfig>>,
+    provider: PersonalOAuthProvider,
+    version: string,
+): Promise<void> {
+    assertHttpsPublicUrl(runtime);
+
+    const app = express();
+    const authPath = routePath(runtime.publicBasePath, "/auth");
+    const loginPath = routePath(authPath, "/login");
+    const healthPath = routePath(runtime.publicBasePath, "/health");
+    const mcpPath = routePath(runtime.publicBasePath, "/mcp");
+
+    app.set("trust proxy", 1);
+    app.use(helmet({ contentSecurityPolicy: false }));
+    app.use(express.json({ limit: "1mb" }));
+    app.use(express.urlencoded({ extended: false, limit: "16kb" }));
+    app.use(cookieParser());
+
+    app.use(
+        mcpAuthRouter({
+            provider,
+            issuerUrl: runtime.authBaseUrl!,
+            baseUrl: runtime.authBaseUrl!,
+            resourceServerUrl: runtime.mcpUrl!,
+            resourceName: "Strava Coach",
+            serviceDocumentationUrl: runtime.publicBaseUrl,
+            scopesSupported: MCP_SCOPES,
+        }),
+    );
+
+    app.get(healthPath, (_req, res) => {
+        res.setHeader("Cache-Control", "no-store");
+        res.json({
+            ok: true,
+            mode: "remote",
+            version,
+            mcpUrl: runtime.mcpUrl?.toString(),
+        });
+    });
+
+    app.get(loginPath, async (req, res) => {
+        const requestId = String(req.query.request_id ?? "");
+        if (!requestId) {
+            res.status(400).type("html").send(chatgptLoginErrorPage("Missing request_id."));
+            return;
         }
-        if (config.refreshToken && !process.env.STRAVA_REFRESH_TOKEN) {
-            process.env.STRAVA_REFRESH_TOKEN = config.refreshToken;
+
+        const session = verifySessionCookie(req.cookies[SESSION_COOKIE_NAME], runtime.sessionSecret!);
+        if (session?.email) {
+            try {
+                const redirectUrl = await provider.finalizeAuthorization(requestId, session.email);
+                res.redirect(302, redirectUrl);
+                return;
+            } catch (error) {
+                res.status(400).type("html").send(chatgptLoginErrorPage(error instanceof Error ? error.message : String(error)));
+                return;
+            }
         }
-        if (config.clientId && !process.env.STRAVA_CLIENT_ID) {
-            process.env.STRAVA_CLIENT_ID = config.clientId;
+
+        res.type("html").send(renderLoginForRequest(requestId, provider.allowedEmail));
+    });
+
+    app.post(loginPath, LOGIN_RATE_LIMIT, async (req, res) => {
+        const { requestId, email, password } = req.body as LoginFormInput;
+        if (!requestId || !email || !password) {
+            res.status(400).type("html").send(chatgptLoginErrorPage("Missing requestId, email, or password."));
+            return;
         }
-        if (config.clientSecret && !process.env.STRAVA_CLIENT_SECRET) {
-            process.env.STRAVA_CLIENT_SECRET = config.clientSecret;
+
+        if (!provider.validateLogin(email, password)) {
+            res.status(401).type("html").send(renderLoginForRequest(requestId, provider.allowedEmail, "Invalid email or session secret."));
+            return;
         }
-        
+
+        const sessionCookie = createSessionCookie(email.toLowerCase(), runtime.sessionSecret!, SESSION_COOKIE_MAX_AGE_SECONDS);
+        res.cookie(SESSION_COOKIE_NAME, sessionCookie, {
+            httpOnly: true,
+            secure: runtime.publicBaseUrl?.protocol === "https:",
+            sameSite: "lax",
+            maxAge: SESSION_COOKIE_MAX_AGE_SECONDS * 1000,
+            path: authPath,
+        });
+
+        try {
+            const redirectUrl = await provider.finalizeAuthorization(requestId, email);
+            res.redirect(302, redirectUrl);
+        } catch (error) {
+            res.status(400).type("html").send(chatgptLoginErrorPage(error instanceof Error ? error.message : String(error)));
+        }
+    });
+
+    app.all(
+        mcpPath,
+        MCP_RATE_LIMIT,
+        requireBearerAuth({
+            verifier: provider,
+            requiredScopes: MCP_SCOPES,
+            resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(runtime.mcpUrl!),
+        }),
+        async (req, res) => {
+            const transport = new StreamableHTTPServerTransport({
+                sessionIdGenerator: undefined,
+            });
+            const mcpServer = buildMcpServer(version, false);
+            const cleanup = () => {
+                void transport.close();
+                void mcpServer.close();
+            };
+
+            try {
+                res.on("close", cleanup);
+                await mcpServer.connect(transport);
+                await transport.handleRequest(req, res, req.body);
+            } catch (error) {
+                console.error("MCP request failed.");
+                if (!res.headersSent) {
+                    res.status(500).json({
+                        jsonrpc: "2.0",
+                        error: {
+                            code: -32603,
+                            message: "Internal server error",
+                        },
+                        id: null,
+                    });
+                }
+                cleanup();
+                return;
+            }
+        },
+    );
+
+    const port = Number(process.env.PORT ?? 3000);
+    await new Promise<void>((resolve, reject) => {
+        const listener = app.listen(port, () => {
+            console.error(`Remote MCP server listening on ${runtime.publicBaseUrl?.origin ?? "http://localhost"}:${port}${runtime.publicBasePath}`);
+            resolve();
+        });
+
+        listener.on("error", (error) => {
+            reject(error);
+        });
+
+        process.on("SIGINT", () => {
+            listener.close(() => process.exit(0));
+        });
+        process.on("SIGTERM", () => {
+            listener.close(() => process.exit(0));
+        });
+    });
+}
+
+async function startStdioServer(version: string): Promise<void> {
+    const server = buildMcpServer(version, true);
     const transport = new StdioServerTransport();
     await server.connect(transport);
-        console.error(`${SERVER_NAME} v${serverVersion} connected via Stdio. Tools registered.`);
-  } catch (error) {
-    console.error("Failed to start server:", error);
-    process.exit(1);
-  }
+    console.error(`${SERVER_NAME} v${version} connected via stdio.`);
 }
 
-startServer();
+async function main(): Promise<void> {
+    try {
+        const runtime = loadRuntimeConfig();
+        const { version: serverVersion } = getServerInfo();
+
+        if (runtime.nodeEnv !== "production") {
+            console.error("Warning: running in non-production mode.");
+        }
+        if (runtime.nodeEnv === "production" && !runtime.isRemoteMode) {
+            throw new Error("PUBLIC_BASE_URL is required in production. Stdio mode is development-only.");
+        }
+        if (runtime.isRemoteMode) {
+            if (!runtime.publicBaseUrl) {
+                throw new Error("PUBLIC_BASE_URL is required for remote mode.");
+            }
+            if (!runtime.authBaseUrl || !runtime.mcpUrl || !runtime.healthUrl) {
+                throw new Error("Failed to derive remote app URLs.");
+            }
+            if (!runtime.sessionSecret) {
+                throw new Error("SESSION_SECRET is required for remote mode.");
+            }
+            if (!runtime.tokenEncryptionKey) {
+                throw new Error("TOKEN_ENCRYPTION_KEY is required for remote mode.");
+            }
+            if (!runtime.allowedUserEmail) {
+                throw new Error("ALLOWED_USER_EMAIL is required for remote mode.");
+            }
+            await persistBootstrapConfig(runtime);
+            const storedConfig = await loadConfig();
+            applyBootstrappedStravaEnv(storedConfig);
+
+            if (!storedConfig.accessToken || !storedConfig.refreshToken) {
+                console.error("Warning: no Strava access/refresh tokens are configured yet. Bootstrap them before using the MCP tools.");
+            }
+
+            const provider = new PersonalOAuthProvider({
+                authBaseUrl: runtime.authBaseUrl,
+                resourceServerUrl: runtime.mcpUrl,
+                allowedUserEmail: runtime.allowedUserEmail,
+                sessionSecret: runtime.sessionSecret,
+                nodeEnv: runtime.nodeEnv,
+            });
+
+            await startRemoteServer(runtime, provider, serverVersion);
+            return;
+        }
+
+        const storedConfig = await loadConfig();
+        applyBootstrappedStravaEnv(storedConfig);
+        await startStdioServer(serverVersion);
+    } catch (error) {
+        console.error("Failed to start server.");
+        if (error instanceof Error) {
+            console.error(error.message);
+        }
+        process.exit(1);
+    }
+}
+
+void main();

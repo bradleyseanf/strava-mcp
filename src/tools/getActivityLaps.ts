@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { getActivityLaps as getActivityLapsClient } from "../stravaClient.js";
-import { formatDuration } from "../server.js"; // Import helper
+import { formatDuration } from "../formatters.js";
 
 const name = "get-activity-laps";
 

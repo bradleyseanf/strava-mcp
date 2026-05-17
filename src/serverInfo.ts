@@ -8,7 +8,7 @@ type PackageJson = {
   mcpName?: string;
 };
 
-export const SERVER_NAME = "Strava MCP Server";
+export const SERVER_NAME = "Strava Coach";
 
 export function getServerInfo(): {
   name: string;

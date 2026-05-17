@@ -136,9 +136,7 @@ async function main() {
         throw new Error('Failed to retrieve tokens from Strava.');
     }
 
-    console.log('\n✅ Successfully obtained tokens!');
-    console.log(`Access Token: ${access_token}`);
-    console.log(`Refresh Token: ${refresh_token}`);
+    console.log('\n✅ Successfully obtained Strava tokens.');
     console.log(`Access Token Expires At: ${new Date(expires_at * 1000).toLocaleString()}`);
 
 
@@ -180,7 +178,6 @@ async function main() {
     console.error('\n❌ Error exchanging code for tokens:');
      if (axios.isAxiosError(error) && error.response) {
         console.error(`Status: ${error.response.status}`);
-        console.error(`Data: ${JSON.stringify(error.response.data)}`);
      } else {
         console.error(error.message || error);
      }

@@ -311,6 +311,109 @@ export function credentialsExistPage(clientId: string): string {
 }
 
 /**
+ * Login page for the ChatGPT OAuth flow.
+ */
+export function chatgptLoginPage(options: {
+    requestId: string;
+    allowedEmail: string;
+    error?: string;
+}): string {
+    const errorHtml = options.error ? `<div class="error-message">${escapeHtml(options.error)}</div>` : '';
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign in to Strava Coach</title>
+    <style>
+        ${baseStyles}
+        .subtle {
+            color: #bdbdbd;
+            font-size: 14px;
+        }
+        .mono {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+            font-size: 13px;
+            word-break: break-all;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">🔐</div>
+        <h1>Authorize Strava Coach</h1>
+        <p>Sign in with the single allowed account to finish ChatGPT authorization.</p>
+        ${errorHtml}
+        <form method="POST" action="/auth/login">
+            <input type="hidden" name="requestId" value="${escapeHtml(options.requestId)}">
+            <div class="form-group">
+                <label for="email">Allowed email</label>
+                <input type="email" id="email" name="email" value="${escapeHtml(options.allowedEmail)}" required>
+            </div>
+            <div class="form-group">
+                <label for="password">Session secret</label>
+                <input type="password" id="password" name="password" placeholder="SESSION_SECRET" required>
+            </div>
+            <button type="submit">Continue</button>
+            <p class="help-text subtle">
+                This finishes the OAuth handshake for ChatGPT. The browser will redirect back automatically.
+            </p>
+        </form>
+    </div>
+</body>
+</html>`;
+}
+
+/**
+ * Success page for the ChatGPT OAuth flow.
+ */
+export function chatgptLoginSuccessPage(): string {
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Connected</title>
+    <style>${baseStyles}</style>
+</head>
+<body>
+    <div class="container">
+        <div class="success-icon">✅</div>
+        <h1>Authorization complete</h1>
+        <p>You can return to ChatGPT now.</p>
+    </div>
+    <script>
+        setTimeout(() => { window.close(); }, 3000);
+    </script>
+</body>
+</html>`;
+}
+
+/**
+ * Error page for the ChatGPT OAuth flow.
+ */
+export function chatgptLoginErrorPage(message: string): string {
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Authorization error</title>
+    <style>${baseStyles}</style>
+</head>
+<body>
+    <div class="container">
+        <div class="error-icon">❌</div>
+        <h1>Authorization failed</h1>
+        <div class="error-message">${escapeHtml(message)}</div>
+        <p class="help-text">Check the allowlisted email and session secret, then try again.</p>
+    </div>
+</body>
+</html>`;
+}
+
+/**
  * Escape HTML to prevent XSS
  */
 function escapeHtml(text: string): string {

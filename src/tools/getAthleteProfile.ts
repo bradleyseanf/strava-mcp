@@ -20,7 +20,7 @@ export const getAthleteProfile = {
       try {
         console.error("Fetching athlete profile...");
         const athlete = await getAuthenticatedAthlete(token);
-        console.error(`Successfully fetched profile for ${athlete.firstname} ${athlete.lastname} (ID: ${athlete.id}).`);
+        console.error("Successfully fetched athlete profile.");
 
         const profileParts = [
           `👤 **Profile for ${athlete.firstname} ${athlete.lastname}** (ID: ${athlete.id})`,

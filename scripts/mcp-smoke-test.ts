@@ -8,6 +8,8 @@ function getAllStringEnv(): Record<string, string> {
       env[key] = value;
     }
   }
+  delete env.PUBLIC_BASE_URL;
+  env.NODE_ENV = "development";
   return env;
 }
 
