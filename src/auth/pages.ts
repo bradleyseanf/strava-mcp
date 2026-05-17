@@ -316,9 +316,29 @@ export function credentialsExistPage(clientId: string): string {
 export function chatgptLoginPage(options: {
     requestId: string;
     allowedEmail: string;
+    pending?: {
+        clientId: string;
+        redirectUri: string;
+        codeChallenge: string;
+        scopes: string[];
+        state?: string;
+        resource?: string;
+    };
     error?: string;
 }): string {
     const errorHtml = options.error ? `<div class="error-message">${escapeHtml(options.error)}</div>` : '';
+    const pending = options.pending;
+    const hiddenFields = pending
+        ? `
+            <input type="hidden" name="requestId" value="${escapeHtml(options.requestId)}">
+            <input type="hidden" name="clientId" value="${escapeHtml(pending.clientId)}">
+            <input type="hidden" name="redirectUri" value="${escapeHtml(pending.redirectUri)}">
+            <input type="hidden" name="codeChallenge" value="${escapeHtml(pending.codeChallenge)}">
+            <input type="hidden" name="scopes" value="${escapeHtml(pending.scopes.join(" "))}">
+            <input type="hidden" name="state" value="${escapeHtml(pending.state ?? "")}">
+            <input type="hidden" name="resource" value="${escapeHtml(pending.resource ?? "")}">
+        `
+        : `<input type="hidden" name="requestId" value="${escapeHtml(options.requestId)}">`;
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -346,7 +366,7 @@ export function chatgptLoginPage(options: {
         <p>Sign in with the single allowed account to finish ChatGPT authorization.</p>
         ${errorHtml}
         <form method="POST" action="/auth/login">
-            <input type="hidden" name="requestId" value="${escapeHtml(options.requestId)}">
+            ${hiddenFields}
             <div class="form-group">
                 <label for="email">Allowed email</label>
                 <input type="email" id="email" name="email" value="${escapeHtml(options.allowedEmail)}" required>

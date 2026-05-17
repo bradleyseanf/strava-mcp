@@ -34,6 +34,16 @@ export interface PersonalOAuthProviderOptions {
     nodeEnv: string;
 }
 
+export interface PendingAuthorizationContext {
+    requestId: string;
+    clientId: string;
+    redirectUri: string;
+    codeChallenge: string;
+    scopes: string[];
+    state?: string;
+    resource?: string;
+}
+
 function randomToken(prefix: string): string {
     return `${prefix}_${crypto.randomUUID().replace(/-/g, "")}`;
 }
@@ -427,5 +437,52 @@ export class PersonalOAuthProvider implements OAuthServerProvider {
 
     get authUrl(): URL {
         return this.authBaseUrl;
+    }
+
+    async getPendingAuthorization(requestId: string): Promise<PendingAuthorizationContext | null> {
+        const state = await loadSecretState();
+        const pending = state.oauth.pending[requestId] ?? pendingAuthorizationCache.get(requestId);
+        if (!pending) {
+            return null;
+        }
+
+        return {
+            requestId,
+            clientId: pending.clientId,
+            redirectUri: pending.redirectUri,
+            codeChallenge: pending.codeChallenge,
+            scopes: pending.scopes,
+            state: pending.state,
+            resource: pending.resource,
+        };
+    }
+
+    async finalizeAuthorizationFromContext(
+        pending: PendingAuthorizationContext,
+        email: string,
+    ): Promise<string> {
+        const code = randomToken("mcp_code");
+        await updateSecretState(async (next) => {
+            next.oauth.codes[code] = {
+                clientId: pending.clientId,
+                redirectUri: pending.redirectUri,
+                codeChallenge: pending.codeChallenge,
+                scopes: pending.scopes,
+                resource: pending.resource,
+                state: pending.state,
+                email,
+                createdAt: Date.now(),
+                expiresAt: Date.now() + AUTH_CODE_TTL_SECONDS * 1000,
+            };
+            delete next.oauth.pending[pending.requestId];
+        });
+        pendingAuthorizationCache.delete(pending.requestId);
+
+        const redirectUrl = new URL(pending.redirectUri);
+        redirectUrl.searchParams.set("code", code);
+        if (pending.state) {
+            redirectUrl.searchParams.set("state", pending.state);
+        }
+        return redirectUrl.toString();
     }
 }

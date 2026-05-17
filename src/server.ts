@@ -13,6 +13,7 @@ import { loadConfig, saveConfig } from "./config.js";
 import { registerStravaTools } from "./mcpTools.js";
 import { loadRuntimeConfig, assertHttpsPublicUrl } from "./runtime.js";
 import { PersonalOAuthProvider } from "./auth/provider.js";
+import type { PendingAuthorizationContext } from "./auth/provider.js";
 import {
     chatgptLoginErrorPage,
     chatgptLoginPage,
@@ -45,6 +46,12 @@ type LoginFormInput = {
     requestId?: string;
     email?: string;
     password?: string;
+    clientId?: string;
+    redirectUri?: string;
+    codeChallenge?: string;
+    scopes?: string;
+    state?: string;
+    resource?: string;
 };
 
 function buildMcpServer(version: string, includeAdminTools: boolean): McpServer {
@@ -95,14 +102,39 @@ function routePath(basePath: string, suffix: string): string {
     return `${cleanBase}${cleanSuffix}` || cleanSuffix;
 }
 
+function parsePendingAuthorization(form: LoginFormInput): PendingAuthorizationContext | null {
+    const requestId = String(form.requestId ?? "");
+    const clientId = String(form.clientId ?? "");
+    const redirectUri = String(form.redirectUri ?? "");
+    const codeChallenge = String(form.codeChallenge ?? "");
+    if (!requestId || !clientId || !redirectUri || !codeChallenge) {
+        return null;
+    }
+
+    return {
+        requestId,
+        clientId,
+        redirectUri,
+        codeChallenge,
+        scopes: String(form.scopes ?? "")
+            .split(" ")
+            .map((scope) => scope.trim())
+            .filter(Boolean),
+        state: String(form.state ?? "") || undefined,
+        resource: String(form.resource ?? "") || undefined,
+    };
+}
+
 function renderLoginForRequest(
     requestId: string,
     allowedEmail: string,
+    pending?: PendingAuthorizationContext | null,
     error?: string,
 ): string {
     return chatgptLoginPage({
         requestId,
         allowedEmail,
+        pending: pending ?? undefined,
         error,
     });
 }
@@ -155,6 +187,8 @@ async function startRemoteServer(
             return;
         }
 
+        const pending = await provider.getPendingAuthorization(requestId);
+
         const session = verifySessionCookie(req.cookies[SESSION_COOKIE_NAME], runtime.sessionSecret!);
         if (session?.email) {
             try {
@@ -167,18 +201,21 @@ async function startRemoteServer(
             }
         }
 
-        res.type("html").send(renderLoginForRequest(requestId, provider.allowedEmail));
+        res.type("html").send(renderLoginForRequest(requestId, provider.allowedEmail, pending));
     });
 
     app.post(loginPath, LOGIN_RATE_LIMIT, async (req, res) => {
-        const { requestId, email, password } = req.body as LoginFormInput;
+        const form = req.body as LoginFormInput;
+        const { requestId, email, password } = form;
         if (!requestId || !email || !password) {
             res.status(400).type("html").send(chatgptLoginErrorPage("Missing requestId, email, or password."));
             return;
         }
 
+        const pending = parsePendingAuthorization(form) ?? await provider.getPendingAuthorization(requestId);
+
         if (!provider.validateLogin(email, password)) {
-            res.status(401).type("html").send(renderLoginForRequest(requestId, provider.allowedEmail, "Invalid email or session secret."));
+            res.status(401).type("html").send(renderLoginForRequest(requestId, provider.allowedEmail, pending, "Invalid email or session secret."));
             return;
         }
 
@@ -192,10 +229,12 @@ async function startRemoteServer(
         });
 
         try {
-            const redirectUrl = await provider.finalizeAuthorization(requestId, email);
+            const redirectUrl = pending
+                ? await provider.finalizeAuthorizationFromContext(pending, email)
+                : await provider.finalizeAuthorization(requestId, email);
             res.redirect(302, redirectUrl);
         } catch (error) {
-            res.status(400).type("html").send(chatgptLoginErrorPage(error instanceof Error ? error.message : String(error)));
+            res.status(400).type("html").send(renderLoginForRequest(requestId, provider.allowedEmail, pending, error instanceof Error ? error.message : String(error)));
         }
     });
 
