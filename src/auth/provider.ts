@@ -147,6 +147,7 @@ export class PersonalOAuthProvider implements OAuthServerProvider {
                 state: params.state,
                 resource: params.resource?.toString(),
                 createdAt: Date.now(),
+                email: this.allowedUserEmail,
             };
         });
 
@@ -340,7 +341,17 @@ export class PersonalOAuthProvider implements OAuthServerProvider {
         email: string,
     ): Promise<string> {
         const state = await loadSecretState();
-        const pending = state.oauth.pending[requestId];
+        let pending = state.oauth.pending[requestId];
+        if (!pending) {
+            const pendingEntries = Object.entries(state.oauth.pending);
+            pending = pendingEntries.find(([, record]) => record.email?.toLowerCase() === email.toLowerCase())?.[1];
+        }
+        if (!pending) {
+            const pendingEntries = Object.values(state.oauth.pending);
+            if (pendingEntries.length === 1) {
+                pending = pendingEntries[0];
+            }
+        }
 
         if (!pending) {
             throw new Error("Authorization request expired or not found.");
