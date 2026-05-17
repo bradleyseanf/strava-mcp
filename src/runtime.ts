@@ -108,9 +108,4 @@ export function assertHttpsPublicUrl(config: RuntimeConfig): void {
     if (config.nodeEnv === "production" && config.publicBaseUrl.protocol !== "https:") {
         throw new Error("PUBLIC_BASE_URL must use https in production.");
     }
-
-    if (config.publicBasePath === "") {
-        throw new Error("PUBLIC_BASE_URL must include the private app path.");
-    }
 }
-

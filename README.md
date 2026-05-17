@@ -22,7 +22,7 @@ npm start
 4. In ChatGPT, add a custom app and point it at:
 
 ```text
-https://your-domain.example/<private-random-app-path>/mcp
+https://your-random-subdomain.example.com/mcp
 ```
 
 5. Complete the OAuth flow once using the allowlisted email.
@@ -30,7 +30,7 @@ https://your-domain.example/<private-random-app-path>/mcp
 ## Required Environment Variables
 
 - `NODE_ENV=production`
-- `PUBLIC_BASE_URL=https://your-domain.example/<private-random-app-path>`
+- `PUBLIC_BASE_URL=https://your-random-subdomain.example.com`
 - `MCP_SECRET_PATH=/var/lib/strava-coach/secrets.enc.json`
 - `SESSION_SECRET=<long-random-session-secret>`
 - `TOKEN_ENCRYPTION_KEY=<long-random-encryption-key>`
@@ -58,7 +58,7 @@ https://your-domain.example/<private-random-app-path>/mcp
 
 - Run the server on your on-prem host.
 - Put Cloudflare Tunnel or another reverse proxy in front of the app.
-- Preserve the full path so `PUBLIC_BASE_URL` matches the public endpoint.
+- Keep `PUBLIC_BASE_URL` pointed at the buried subdomain so it does not share the main marketing site route tree.
 - Keep `MCP_SECRET_PATH` outside the repository on persistent storage.
 - Do not expose the MCP endpoint without OAuth in front of it.
 - Run `npm run security-check` before connecting ChatGPT to the live URL.

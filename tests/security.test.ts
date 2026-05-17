@@ -27,19 +27,19 @@ async function withEnv<T>(vars: Record<string, string | undefined>, fn: () => Pr
 }
 
 describe("runtime config", () => {
-    it("derives the private app routes from PUBLIC_BASE_URL", async () => {
+    it("derives app routes from a root PUBLIC_BASE_URL", async () => {
         const { loadRuntimeConfig } = await import("../src/runtime.js");
 
         await withEnv(
             {
-                PUBLIC_BASE_URL: "https://integratecore.net/a7f7v7902-djhfhee723-dhd8333v",
+                PUBLIC_BASE_URL: "https://c7c6e3f4-9f97-4d6e-a3b2-8c4d7f1e52ab.integratecore.net",
                 MCP_SECRET_PATH: path.join(os.tmpdir(), "strava-mcp-test", "secrets.enc.json"),
             },
             async () => {
                 const runtime = loadRuntimeConfig();
-                expect(runtime.publicBasePath).toBe("/a7f7v7902-djhfhee723-dhd8333v");
-                expect(runtime.mcpUrl?.pathname).toBe("/a7f7v7902-djhfhee723-dhd8333v/mcp");
-                expect(runtime.authBaseUrl?.pathname).toBe("/a7f7v7902-djhfhee723-dhd8333v/auth");
+                expect(runtime.publicBasePath).toBe("");
+                expect(runtime.mcpUrl?.pathname).toBe("/mcp");
+                expect(runtime.authBaseUrl?.pathname).toBe("/auth");
             },
         );
     });
@@ -98,4 +98,3 @@ describe("encrypted secret store", () => {
         );
     });
 });
-

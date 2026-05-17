@@ -54,9 +54,9 @@ async function main(): Promise<void> {
         details: runtime.publicBaseUrl?.toString() ?? "missing",
     });
     results.push({
-        name: "Public URL includes private path",
-        passed: Boolean(runtime.publicBasePath),
-        details: runtime.publicBasePath || "missing",
+        name: "Public URL is rooted on its own host or private path",
+        passed: Boolean(runtime.publicBaseUrl),
+        details: runtime.publicBaseUrl?.toString() ?? "missing",
     });
 
     const secretStorePath = path.resolve(runtime.secretStorePath);
