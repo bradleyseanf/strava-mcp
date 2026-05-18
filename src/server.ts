@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import dotenv from "dotenv";
 import express from "express";
+import type { RequestHandler } from "express";
 import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
@@ -52,6 +53,34 @@ type LoginFormInput = {
     scopes?: string;
     state?: string;
     resource?: string;
+};
+
+function decodeFormComponent(value: string): string {
+    try {
+        return decodeURIComponent(value.replace(/\+/g, " "));
+    } catch {
+        return value;
+    }
+}
+
+const attachBasicClientCredentials: RequestHandler = (req, _res, next) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith("Basic ")) {
+        next();
+        return;
+    }
+
+    const decoded = Buffer.from(authHeader.slice("Basic ".length), "base64").toString("utf8");
+    const separator = decoded.indexOf(":");
+    if (separator < 0) {
+        next();
+        return;
+    }
+
+    const body = req.body as Record<string, string | undefined>;
+    body.client_id ??= decodeFormComponent(decoded.slice(0, separator));
+    body.client_secret ??= decodeFormComponent(decoded.slice(separator + 1));
+    next();
 };
 
 function buildMcpServer(version: string, includeAdminTools: boolean): McpServer {
@@ -157,6 +186,7 @@ async function startRemoteServer(
     app.use(express.json({ limit: "1mb" }));
     app.use(express.urlencoded({ extended: false, limit: "16kb" }));
     app.use(cookieParser());
+    app.use("/token", attachBasicClientCredentials);
 
     app.use(
         mcpAuthRouter({

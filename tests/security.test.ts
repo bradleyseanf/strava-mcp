@@ -135,4 +135,46 @@ describe("oauth client registration", () => {
             },
         );
     });
+
+    it("stores DCR clients as public PKCE clients when auth method is omitted", async () => {
+        const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "strava-mcp-oauth-public-"));
+        const secretPath = path.join(tempDir, "secrets.enc.json");
+
+        await withEnv(
+            {
+                MCP_SECRET_PATH: secretPath,
+                TOKEN_ENCRYPTION_KEY: "test-encryption-key",
+                SESSION_SECRET: "test-session-secret",
+                NODE_ENV: "production",
+            },
+            async () => {
+                const { PersonalOAuthProvider } = await import("../src/auth/provider.js");
+                const provider = new PersonalOAuthProvider({
+                    authBaseUrl: new URL("https://example.com/auth"),
+                    resourceServerUrl: new URL("https://example.com/mcp"),
+                    allowedUserEmail: "user@example.com",
+                    sessionSecret: "test-session-secret",
+                    nodeEnv: "production",
+                });
+
+                const client = await provider.clientsStore.registerClient({
+                    redirect_uris: ["https://chatgpt.com/connector/oauth/test"],
+                    grant_types: ["authorization_code"],
+                    response_types: ["code"],
+                    client_name: "ChatGPT",
+                    client_secret: "sdk-generated-secret",
+                    client_secret_expires_at: 123,
+                    scope: "mcp:tools",
+                });
+
+                expect(client.token_endpoint_auth_method).toBe("none");
+                expect(client.client_secret).toBeUndefined();
+                expect(client.client_secret_expires_at).toBeUndefined();
+
+                const storedClient = await provider.clientsStore.getClient(client.client_id);
+                expect(storedClient?.token_endpoint_auth_method).toBe("none");
+                expect(storedClient?.client_secret).toBeUndefined();
+            },
+        );
+    });
 });

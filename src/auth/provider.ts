@@ -10,6 +10,12 @@ import type { OAuthRegisteredClientsStore } from "@modelcontextprotocol/sdk/serv
 import { checkResourceAllowed } from "@modelcontextprotocol/sdk/shared/auth-utils.js";
 import type { OAuthServerProvider } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import { loadSecretState, updateSecretState } from "../secretStore.js";
+import type {
+    AppSecretState,
+    OAuthAccessTokenRecord,
+    OAuthAuthorizationCodeRecord,
+    OAuthRefreshTokenRecord,
+} from "../secretStore.js";
 
 const ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
 const REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
@@ -25,6 +31,9 @@ const pendingAuthorizationCache = new Map<string, {
     createdAt: number;
     email?: string;
 }>();
+const authorizationCodeCache = new Map<string, OAuthAuthorizationCodeRecord>();
+const accessTokenCache = new Map<string, OAuthAccessTokenRecord>();
+const refreshTokenCache = new Map<string, OAuthRefreshTokenRecord>();
 
 export interface PersonalOAuthProviderOptions {
     authBaseUrl: URL;
@@ -78,6 +87,43 @@ function timingSafeEqualStrings(left: string, right: string): boolean {
     return crypto.timingSafeEqual(leftBuf, rightBuf);
 }
 
+function oauthLog(event: string, details: Record<string, string | number | boolean | undefined> = {}): void {
+    const parts = Object.entries(details)
+        .filter(([, value]) => value !== undefined)
+        .map(([key, value]) => `${key}=${value}`);
+    console.error(`[oauth] ${event}${parts.length > 0 ? ` ${parts.join(" ")}` : ""}`);
+}
+
+function normalizeRegisteredClient(client: OAuthClientInformationFull): OAuthClientInformationFull {
+    const publicClient = { ...client };
+    delete publicClient.client_secret;
+    delete publicClient.client_secret_expires_at;
+
+    return {
+        ...publicClient,
+        token_endpoint_auth_method: "none",
+    };
+}
+
+async function loadOAuthState(): Promise<AppSecretState["oauth"]> {
+    try {
+        return (await loadSecretState()).oauth;
+    } catch (error) {
+        console.error(
+            `Secret store read failed. Check MCP_SECRET_PATH permissions: ${
+                error instanceof Error ? error.message : String(error)
+            }`,
+        );
+        return {
+            clients: {},
+            pending: {},
+            codes: {},
+            accessTokens: {},
+            refreshTokens: {},
+        };
+    }
+}
+
 export class PersonalOAuthProvider implements OAuthServerProvider {
     public readonly skipLocalPkceValidation = false;
 
@@ -93,12 +139,14 @@ export class PersonalOAuthProvider implements OAuthServerProvider {
             if (cachedClient) {
                 return cachedClient;
             }
-            const state = await loadSecretState();
-            const storedClient = state.oauth.clients[clientId];
+            const oauth = await loadOAuthState();
+            const storedClient = oauth.clients[clientId];
             if (storedClient) {
-                registeredClientsCache.set(clientId, storedClient);
+                const normalizedClient = normalizeRegisteredClient(storedClient);
+                registeredClientsCache.set(clientId, normalizedClient);
+                return normalizedClient;
             }
-            return storedClient;
+            return undefined;
         },
         registerClient: async (client: any) => {
             const redirectUris = (client.redirect_uris ?? []).map((redirectUri: string | URL) =>
@@ -116,16 +164,21 @@ export class PersonalOAuthProvider implements OAuthServerProvider {
 
             const existingClient = client as OAuthClientInformationFull & { client_id?: string };
             const clientId = existingClient.client_id ?? crypto.randomUUID();
-            const clientRecord: OAuthClientInformationFull = {
+            const clientRecord = normalizeRegisteredClient({
                 ...client,
                 client_id: clientId,
                 client_id_issued_at: Math.floor(Date.now() / 1000),
-            };
+            });
 
             await updateSecretState((state) => {
                 state.oauth.clients[clientId] = clientRecord;
             });
             registeredClientsCache.set(clientId, clientRecord);
+            oauthLog("client.registered", {
+                clientId,
+                authMethod: clientRecord.token_endpoint_auth_method,
+                redirectCount: redirectUris.length,
+            });
 
             return clientRecord;
         },
@@ -155,22 +208,27 @@ export class PersonalOAuthProvider implements OAuthServerProvider {
         res: Response,
     ): Promise<void> {
         const requestId = crypto.randomUUID();
+        oauthLog("authorize.request", {
+            clientId: client.client_id,
+            requestId,
+            redirectHost: new URL(params.redirectUri).host,
+        });
         const pendingPath = appendPath(this.authBaseUrl, "/login");
         pendingPath.searchParams.set("request_id", requestId);
+        const pending = {
+            clientId: client.client_id,
+            redirectUri: params.redirectUri,
+            codeChallenge: params.codeChallenge,
+            scopes: params.scopes ?? [],
+            state: params.state,
+            resource: params.resource?.toString(),
+            createdAt: Date.now(),
+            email: this.allowedUserEmail,
+        };
 
+        pendingAuthorizationCache.set(requestId, pending);
         await updateSecretState((state) => {
-            const pending = {
-                clientId: client.client_id,
-                redirectUri: params.redirectUri,
-                codeChallenge: params.codeChallenge,
-                scopes: params.scopes ?? [],
-                state: params.state,
-                resource: params.resource?.toString(),
-                createdAt: Date.now(),
-                email: this.allowedUserEmail,
-            };
             state.oauth.pending[requestId] = pending;
-            pendingAuthorizationCache.set(requestId, pending);
         });
 
         secureRedirect(pendingPath, res);
@@ -180,8 +238,8 @@ export class PersonalOAuthProvider implements OAuthServerProvider {
         client: OAuthClientInformationFull,
         authorizationCode: string,
     ): Promise<string> {
-        const state = await loadSecretState();
-        const record = state.oauth.codes[authorizationCode];
+        const oauth = await loadOAuthState();
+        const record = oauth.codes[authorizationCode] ?? authorizationCodeCache.get(authorizationCode);
         if (!record || record.clientId !== client.client_id) {
             throw new Error("Invalid authorization code");
         }
@@ -195,22 +253,41 @@ export class PersonalOAuthProvider implements OAuthServerProvider {
         redirectUri?: string,
         resource?: URL,
     ): Promise<OAuthTokens> {
-        const state = await loadSecretState();
-        const record = state.oauth.codes[authorizationCode];
+        oauthLog("token.exchange.start", {
+            clientId: client.client_id,
+        });
+        const oauth = await loadOAuthState();
+        const record = oauth.codes[authorizationCode] ?? authorizationCodeCache.get(authorizationCode);
 
         if (!record) {
+            oauthLog("token.exchange.missing_code", {
+                clientId: client.client_id,
+            });
             throw new Error("Invalid authorization code");
         }
         if (record.clientId !== client.client_id) {
+            oauthLog("token.exchange.client_mismatch", {
+                clientId: client.client_id,
+                codeClientId: record.clientId,
+            });
             throw new Error("Authorization code was not issued to this client.");
         }
         if (record.expiresAt < Date.now()) {
+            oauthLog("token.exchange.expired", {
+                clientId: client.client_id,
+            });
             throw new Error("Authorization code has expired.");
         }
         if (redirectUri && redirectUri !== record.redirectUri) {
+            oauthLog("token.exchange.redirect_mismatch", {
+                clientId: client.client_id,
+            });
             throw new Error("redirect_uri mismatch.");
         }
         if (resource && record.resource && !checkResourceAllowed({ requestedResource: resource, configuredResource: record.resource })) {
+            oauthLog("token.exchange.resource_mismatch", {
+                clientId: client.client_id,
+            });
             throw new Error("resource mismatch.");
         }
 
@@ -219,32 +296,40 @@ export class PersonalOAuthProvider implements OAuthServerProvider {
         const now = Date.now();
         const scopes = record.scopes;
         const resolvedResource = record.resource ? new URL(record.resource) : resource;
+        const accessRecord: OAuthAccessTokenRecord = {
+            clientId: client.client_id,
+            scopes,
+            resource: resolvedResource?.toString(),
+            email: record.email,
+            createdAt: now,
+            expiresAt: now + ACCESS_TOKEN_TTL_SECONDS * 1000,
+            refreshToken,
+        };
+        const refreshRecord: OAuthRefreshTokenRecord = {
+            clientId: client.client_id,
+            scopes,
+            resource: resolvedResource?.toString(),
+            email: record.email,
+            createdAt: now,
+            expiresAt: now + REFRESH_TOKEN_TTL_SECONDS * 1000,
+            accessToken,
+        };
 
+        authorizationCodeCache.delete(authorizationCode);
+        accessTokenCache.set(accessToken, accessRecord);
+        refreshTokenCache.set(refreshToken, refreshRecord);
         await updateSecretState(async (next) => {
             delete next.oauth.codes[authorizationCode];
-            next.oauth.accessTokens[accessToken] = {
-                clientId: client.client_id,
-                scopes,
-                resource: resolvedResource?.toString(),
-                email: record.email,
-                createdAt: now,
-                expiresAt: now + ACCESS_TOKEN_TTL_SECONDS * 1000,
-                refreshToken,
-            };
-            next.oauth.refreshTokens[refreshToken] = {
-                clientId: client.client_id,
-                scopes,
-                resource: resolvedResource?.toString(),
-                email: record.email,
-                createdAt: now,
-                expiresAt: now + REFRESH_TOKEN_TTL_SECONDS * 1000,
-                accessToken,
-            };
+            next.oauth.accessTokens[accessToken] = accessRecord;
+            next.oauth.refreshTokens[refreshToken] = refreshRecord;
+        });
+        oauthLog("token.exchange.success", {
+            clientId: client.client_id,
         });
 
         return {
             access_token: accessToken,
-            token_type: "bearer",
+            token_type: "Bearer",
             expires_in: ACCESS_TOKEN_TTL_SECONDS,
             scope: scopes.join(" "),
             refresh_token: refreshToken,
@@ -257,19 +342,35 @@ export class PersonalOAuthProvider implements OAuthServerProvider {
         scopes?: string[],
         resource?: URL,
     ): Promise<OAuthTokens> {
-        const state = await loadSecretState();
-        const record = state.oauth.refreshTokens[refreshToken];
+        oauthLog("token.refresh.start", {
+            clientId: client.client_id,
+        });
+        const oauth = await loadOAuthState();
+        const record = oauth.refreshTokens[refreshToken] ?? refreshTokenCache.get(refreshToken);
 
         if (!record) {
+            oauthLog("token.refresh.missing_token", {
+                clientId: client.client_id,
+            });
             throw new Error("Invalid refresh token");
         }
         if (record.clientId !== client.client_id) {
+            oauthLog("token.refresh.client_mismatch", {
+                clientId: client.client_id,
+                tokenClientId: record.clientId,
+            });
             throw new Error("Refresh token was not issued to this client.");
         }
         if (record.expiresAt < Date.now()) {
+            oauthLog("token.refresh.expired", {
+                clientId: client.client_id,
+            });
             throw new Error("Refresh token has expired.");
         }
         if (resource && record.resource && !checkResourceAllowed({ requestedResource: resource, configuredResource: record.resource })) {
+            oauthLog("token.refresh.resource_mismatch", {
+                clientId: client.client_id,
+            });
             throw new Error("resource mismatch.");
         }
 
@@ -278,33 +379,42 @@ export class PersonalOAuthProvider implements OAuthServerProvider {
         const accessToken = randomToken("mcp_at");
         const nextRefreshToken = randomToken("mcp_rt");
         const now = Date.now();
+        const accessRecord: OAuthAccessTokenRecord = {
+            clientId: client.client_id,
+            scopes: requestedScopes,
+            resource: resolvedResource?.toString(),
+            email: record.email,
+            createdAt: now,
+            expiresAt: now + ACCESS_TOKEN_TTL_SECONDS * 1000,
+            refreshToken: nextRefreshToken,
+        };
+        const refreshRecord: OAuthRefreshTokenRecord = {
+            clientId: client.client_id,
+            scopes: requestedScopes,
+            resource: resolvedResource?.toString(),
+            email: record.email,
+            createdAt: now,
+            expiresAt: now + REFRESH_TOKEN_TTL_SECONDS * 1000,
+            accessToken,
+        };
 
+        accessTokenCache.delete(record.accessToken);
+        refreshTokenCache.delete(refreshToken);
+        accessTokenCache.set(accessToken, accessRecord);
+        refreshTokenCache.set(nextRefreshToken, refreshRecord);
         await updateSecretState(async (next) => {
             delete next.oauth.accessTokens[record.accessToken];
             delete next.oauth.refreshTokens[refreshToken];
-            next.oauth.accessTokens[accessToken] = {
-                clientId: client.client_id,
-                scopes: requestedScopes,
-                resource: resolvedResource?.toString(),
-                email: record.email,
-                createdAt: now,
-                expiresAt: now + ACCESS_TOKEN_TTL_SECONDS * 1000,
-                refreshToken: nextRefreshToken,
-            };
-            next.oauth.refreshTokens[nextRefreshToken] = {
-                clientId: client.client_id,
-                scopes: requestedScopes,
-                resource: resolvedResource?.toString(),
-                email: record.email,
-                createdAt: now,
-                expiresAt: now + REFRESH_TOKEN_TTL_SECONDS * 1000,
-                accessToken,
-            };
+            next.oauth.accessTokens[accessToken] = accessRecord;
+            next.oauth.refreshTokens[nextRefreshToken] = refreshRecord;
+        });
+        oauthLog("token.refresh.success", {
+            clientId: client.client_id,
         });
 
         return {
             access_token: accessToken,
-            token_type: "bearer",
+            token_type: "Bearer",
             expires_in: ACCESS_TOKEN_TTL_SECONDS,
             scope: requestedScopes.join(" "),
             refresh_token: nextRefreshToken,
@@ -312,8 +422,8 @@ export class PersonalOAuthProvider implements OAuthServerProvider {
     }
 
     async verifyAccessToken(token: string): Promise<AuthInfo> {
-        const state = await loadSecretState();
-        const record = state.oauth.accessTokens[token];
+        const oauth = await loadOAuthState();
+        const record = oauth.accessTokens[token] ?? accessTokenCache.get(token);
 
         if (!record) {
             throw new Error("Invalid access token");
@@ -338,9 +448,9 @@ export class PersonalOAuthProvider implements OAuthServerProvider {
         _client: OAuthClientInformationFull,
         request: OAuthTokenRevocationRequest,
     ): Promise<void> {
-        const state = await loadSecretState();
-        const accessRecord = state.oauth.accessTokens[request.token];
-        const refreshRecord = state.oauth.refreshTokens[request.token];
+        const oauth = await loadOAuthState();
+        const accessRecord = oauth.accessTokens[request.token] ?? accessTokenCache.get(request.token);
+        const refreshRecord = oauth.refreshTokens[request.token] ?? refreshTokenCache.get(request.token);
 
         if (!accessRecord && !refreshRecord) {
             return;
@@ -348,10 +458,14 @@ export class PersonalOAuthProvider implements OAuthServerProvider {
 
         await updateSecretState(async (next) => {
             if (accessRecord) {
+                refreshTokenCache.delete(accessRecord.refreshToken);
+                accessTokenCache.delete(request.token);
                 delete next.oauth.refreshTokens[accessRecord.refreshToken];
                 delete next.oauth.accessTokens[request.token];
             }
             if (refreshRecord) {
+                accessTokenCache.delete(refreshRecord.accessToken);
+                refreshTokenCache.delete(request.token);
                 delete next.oauth.accessTokens[refreshRecord.accessToken];
                 delete next.oauth.refreshTokens[request.token];
             }
@@ -362,13 +476,13 @@ export class PersonalOAuthProvider implements OAuthServerProvider {
         requestId: string,
         email: string,
     ): Promise<string> {
-        const state = await loadSecretState();
-        let pending = state.oauth.pending[requestId];
+        const oauth = await loadOAuthState();
+        let pending = oauth.pending[requestId];
         if (!pending) {
             pending = pendingAuthorizationCache.get(requestId);
         }
         if (!pending) {
-            const pendingEntries = Object.entries(state.oauth.pending);
+            const pendingEntries = Object.entries(oauth.pending);
             pending = pendingEntries.find(([, record]) => record.email?.toLowerCase() === email.toLowerCase())?.[1];
         }
         if (!pending) {
@@ -376,7 +490,7 @@ export class PersonalOAuthProvider implements OAuthServerProvider {
             pending = cacheEntries.find((record) => record.email?.toLowerCase() === email.toLowerCase());
         }
         if (!pending) {
-            const pendingEntries = Object.values(state.oauth.pending);
+            const pendingEntries = Object.values(oauth.pending);
             if (pendingEntries.length === 1) {
                 pending = pendingEntries[0];
             }
@@ -396,18 +510,20 @@ export class PersonalOAuthProvider implements OAuthServerProvider {
         }
 
         const code = randomToken("mcp_code");
+        const codeRecord: OAuthAuthorizationCodeRecord = {
+            clientId: pending.clientId,
+            redirectUri: pending.redirectUri,
+            codeChallenge: pending.codeChallenge,
+            scopes: pending.scopes,
+            resource: pending.resource,
+            state: pending.state,
+            email,
+            createdAt: Date.now(),
+            expiresAt: Date.now() + AUTH_CODE_TTL_SECONDS * 1000,
+        };
+        authorizationCodeCache.set(code, codeRecord);
         await updateSecretState(async (next) => {
-            next.oauth.codes[code] = {
-                clientId: pending.clientId,
-                redirectUri: pending.redirectUri,
-                codeChallenge: pending.codeChallenge,
-                scopes: pending.scopes,
-                resource: pending.resource,
-                state: pending.state,
-                email,
-                createdAt: Date.now(),
-                expiresAt: Date.now() + AUTH_CODE_TTL_SECONDS * 1000,
-            };
+            next.oauth.codes[code] = codeRecord;
             delete next.oauth.pending[requestId];
         });
         pendingAuthorizationCache.delete(requestId);
@@ -440,8 +556,8 @@ export class PersonalOAuthProvider implements OAuthServerProvider {
     }
 
     async getPendingAuthorization(requestId: string): Promise<PendingAuthorizationContext | null> {
-        const state = await loadSecretState();
-        const pending = state.oauth.pending[requestId] ?? pendingAuthorizationCache.get(requestId);
+        const oauth = await loadOAuthState();
+        const pending = oauth.pending[requestId] ?? pendingAuthorizationCache.get(requestId);
         if (!pending) {
             return null;
         }
@@ -462,18 +578,20 @@ export class PersonalOAuthProvider implements OAuthServerProvider {
         email: string,
     ): Promise<string> {
         const code = randomToken("mcp_code");
+        const codeRecord: OAuthAuthorizationCodeRecord = {
+            clientId: pending.clientId,
+            redirectUri: pending.redirectUri,
+            codeChallenge: pending.codeChallenge,
+            scopes: pending.scopes,
+            resource: pending.resource,
+            state: pending.state,
+            email,
+            createdAt: Date.now(),
+            expiresAt: Date.now() + AUTH_CODE_TTL_SECONDS * 1000,
+        };
+        authorizationCodeCache.set(code, codeRecord);
         await updateSecretState(async (next) => {
-            next.oauth.codes[code] = {
-                clientId: pending.clientId,
-                redirectUri: pending.redirectUri,
-                codeChallenge: pending.codeChallenge,
-                scopes: pending.scopes,
-                resource: pending.resource,
-                state: pending.state,
-                email,
-                createdAt: Date.now(),
-                expiresAt: Date.now() + AUTH_CODE_TTL_SECONDS * 1000,
-            };
+            next.oauth.codes[code] = codeRecord;
             delete next.oauth.pending[pending.requestId];
         });
         pendingAuthorizationCache.delete(pending.requestId);

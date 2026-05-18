@@ -190,7 +190,16 @@ export async function updateSecretState(
             await saveSecretState(state);
             resultState = state;
         })
-        .then(() => undefined, () => undefined);
+        .then(
+            () => undefined,
+            (error) => {
+                console.error(
+                    `Secret store update failed. Check MCP_SECRET_PATH permissions: ${
+                        error instanceof Error ? error.message : String(error)
+                    }`,
+                );
+            },
+        );
     await writeQueue;
     return resultState;
 }
