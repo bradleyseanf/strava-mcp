@@ -1,8 +1,8 @@
 import http from 'http';
 import { URL } from 'url';
-import axios from 'axios';
 import { setupPage, successPage, errorPage, credentialsExistPage } from './pages.js';
 import { saveConfig, loadConfig, saveClientCredentials, hasClientCredentials, clearClientCredentials } from '../config.js';
+import { requestStravaOAuthToken } from '../stravaOAuth.js';
 
 const PORT = 8111;
 const REDIRECT_URI = `http://localhost:${PORT}/callback`;
@@ -132,14 +132,14 @@ export function startAuthServer(): Promise<AuthResult> {
                     // Exchange code for tokens
                     try {
                         const config = await loadConfig();
-                        const tokenResponse = await axios.post('https://www.strava.com/oauth/token', {
-                            client_id: config.clientId,
-                            client_secret: config.clientSecret,
-                            code: code,
-                            grant_type: 'authorization_code',
+                        const tokenResponse = await requestStravaOAuthToken({
+                            clientId: config.clientId!,
+                            clientSecret: config.clientSecret!,
+                            code,
+                            grantType: 'authorization_code',
                         });
                         
-                        const { access_token, refresh_token, expires_at, athlete } = tokenResponse.data;
+                        const { access_token, refresh_token, expires_at, athlete } = tokenResponse;
                         
                         // Save tokens
                         await saveConfig({

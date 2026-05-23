@@ -1,9 +1,9 @@
-import axios from 'axios';
 import * as dotenv from 'dotenv';
 import * as readline from 'readline/promises';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { requestStravaOAuthToken } from '../src/stravaOAuth.js';
 
 // Define required scopes for all current and planned tools
 // Explicitly request profile and activity read access.
@@ -123,14 +123,14 @@ async function main() {
   console.log('\nStep 2: Exchanging code for tokens...');
 
   try {
-    const response = await axios.post('https://www.strava.com/oauth/token', {
-        client_id: clientId,
-        client_secret: clientSecret,
+    const response = await requestStravaOAuthToken({
+        clientId,
+        clientSecret,
         code: authCode,
-        grant_type: 'authorization_code',
+        grantType: 'authorization_code',
     });
 
-    const { access_token, refresh_token, expires_at } = response.data;
+    const { access_token, refresh_token, expires_at } = response;
 
     if (!access_token || !refresh_token) {
         throw new Error('Failed to retrieve tokens from Strava.');

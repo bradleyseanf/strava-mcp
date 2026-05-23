@@ -13,15 +13,20 @@ export interface StravaConfig {
     expiresAt?: number;
 }
 
+function normalizeOptionalString(value?: string): string | undefined {
+    const trimmed = value?.trim();
+    return trimmed ? trimmed : undefined;
+}
+
 function mergeConfig(
     stored: StravaConfig,
     env: ReturnType<typeof loadRuntimeConfig>,
 ): StravaConfig {
     return {
-        clientId: env.stravaClientId ?? stored.clientId,
-        clientSecret: env.stravaClientSecret ?? stored.clientSecret,
-        accessToken: env.stravaAccessToken ?? stored.accessToken,
-        refreshToken: env.stravaRefreshToken ?? stored.refreshToken,
+        clientId: normalizeOptionalString(env.stravaClientId) ?? stored.clientId,
+        clientSecret: normalizeOptionalString(env.stravaClientSecret) ?? stored.clientSecret,
+        accessToken: normalizeOptionalString(env.stravaAccessToken) ?? stored.accessToken,
+        refreshToken: normalizeOptionalString(env.stravaRefreshToken) ?? stored.refreshToken,
         expiresAt: stored.expiresAt,
     };
 }

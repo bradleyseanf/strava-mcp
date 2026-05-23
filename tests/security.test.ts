@@ -97,6 +97,39 @@ describe("encrypted secret store", () => {
             },
         );
     });
+
+    it("ignores blank Strava env placeholders when loading stored credentials", async () => {
+        const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "strava-mcp-secrets-blank-env-"));
+        const secretPath = path.join(tempDir, "secrets.enc.json");
+
+        await withEnv(
+            {
+                MCP_SECRET_PATH: secretPath,
+                TOKEN_ENCRYPTION_KEY: "test-encryption-key",
+                SESSION_SECRET: "test-session-secret",
+                NODE_ENV: "development",
+                STRAVA_ACCESS_TOKEN: "",
+                STRAVA_REFRESH_TOKEN: "",
+                STRAVA_CLIENT_ID: "",
+                STRAVA_CLIENT_SECRET: "",
+            },
+            async () => {
+                const { saveConfig, loadConfig } = await import("../src/config.js");
+                await saveConfig({
+                    clientId: "client-id",
+                    clientSecret: "client-secret",
+                    accessToken: "access-token",
+                    refreshToken: "refresh-token",
+                });
+
+                const stored = await loadConfig();
+                expect(stored.clientId).toBe("client-id");
+                expect(stored.clientSecret).toBe("client-secret");
+                expect(stored.accessToken).toBe("access-token");
+                expect(stored.refreshToken).toBe("refresh-token");
+            },
+        );
+    });
 });
 
 describe("oauth client registration", () => {

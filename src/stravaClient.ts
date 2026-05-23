@@ -1,5 +1,6 @@
 import axios from "axios";
 import { z } from "zod";
+import { requestStravaOAuthToken } from "./stravaOAuth.js";
 
 // --- Axios Instance & Interceptor --- 
 // Create an Axios instance to apply interceptors globally for this client
@@ -338,17 +339,17 @@ async function refreshAccessToken(): Promise<string> {
     }
 
     try {
-        const response = await axios.post('https://www.strava.com/oauth/token', {
-            client_id: clientId,
-            client_secret: clientSecret,
-            refresh_token: refreshToken,
-            grant_type: 'refresh_token'
+        const response = await requestStravaOAuthToken({
+            clientId,
+            clientSecret,
+            refreshToken,
+            grantType: "refresh_token",
         });
 
         // Update tokens in environment variables for the current process
-        const newAccessToken = response.data.access_token;
-        const newRefreshToken = response.data.refresh_token;
-        const expiresAt = response.data.expires_at;
+        const newAccessToken = response.access_token;
+        const newRefreshToken = response.refresh_token;
+        const expiresAt = response.expires_at;
 
         if (!newAccessToken || !newRefreshToken) {
             throw new Error('Refresh response missing required tokens');
