@@ -27,7 +27,7 @@ export const getAthleteProfile = {
           `   - Username: ${athlete.username || 'N/A'}`,
           `   - Location: ${[athlete.city, athlete.state, athlete.country].filter(Boolean).join(", ") || 'N/A'}`,
           `   - Sex: ${athlete.sex || 'N/A'}`,
-          `   - Weight: ${athlete.weight ? `${athlete.weight} kg` : 'N/A'}`,
+          `   - Weight: ${athlete.weight != null ? `${athlete.weight} kg` : 'N/A'}`,
           `   - Measurement Units: ${athlete.measurement_preference}`,
           `   - Strava Summit Member: ${athlete.summit ? 'Yes' : 'No'}`,
           `   - Profile Image (Medium): ${athlete.profile_medium}`,

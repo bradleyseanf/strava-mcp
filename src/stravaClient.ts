@@ -52,7 +52,7 @@ const DetailedAthleteSchema = BaseAthleteSchema.extend({
     updated_at: z.string().datetime(),
     profile_medium: z.string().url(),
     profile: z.string().url(),
-    weight: z.number().nullable(),
+    weight: z.number().optional().nullable(),
     measurement_preference: z.enum(["feet", "meters"]).optional().nullable(),
     bikes: z.array(z.object({
         id: z.string(),
@@ -475,64 +475,29 @@ export async function getAllActivities(
     let currentPage = page;
     let hasMore = true;
 
-    try {
-        while (hasMore) {
-            // Build query parameters
-            const queryParams: Record<string, any> = {
-                page: currentPage,
-                per_page: perPage
-            };
-            
-            // Add date filters if provided
-            if (before !== undefined) queryParams.before = before;
-            if (after !== undefined) queryParams.after = after;
+    while (hasMore) {
+        const activities = await getActivitiesPage(accessToken, {
+            page: currentPage,
+            perPage,
+            before,
+            after,
+        });
 
-            // Fetch current page
-            const response = await stravaApi.get<unknown>("athlete/activities", {
-                headers: { Authorization: `Bearer ${accessToken}` },
-                params: queryParams
-            });
+        allActivities.push(...activities);
 
-            const validationResult = StravaActivitiesResponseSchema.safeParse(response.data);
-
-            if (!validationResult.success) {
-                console.error(`Strava API response validation failed (getAllActivities page ${currentPage}):`, validationResult.error);
-                throw new Error(`Invalid data format received from Strava API: ${validationResult.error.message}`);
-            }
-
-            const activities = validationResult.data;
-            
-            // Add activities to collection
-            allActivities.push(...activities);
-            
-            // Report progress if callback provided
-            if (onProgress) {
-                onProgress(allActivities.length, currentPage);
-            }
-
-            // Check if we should continue
-            // Stop if we got fewer activities than requested (indicating last page)
-            hasMore = activities.length === perPage;
-            currentPage++;
-
-            // Add a small delay to be respectful of rate limits
-            if (hasMore) {
-                await new Promise(resolve => setTimeout(resolve, 100));
-            }
+        if (onProgress) {
+            onProgress(allActivities.length, currentPage);
         }
 
-        return allActivities;
-    } catch (error) {
-        // If it's an auth error and we're on first page, try token refresh
-        if (currentPage === 1) {
-            return await handleApiError<any[]>(error, 'getAllActivities', async () => {
-                const newToken = process.env.STRAVA_ACCESS_TOKEN!;
-                return getAllActivities(newToken, params);
-            });
+        hasMore = activities.length === perPage;
+        currentPage++;
+
+        if (hasMore) {
+            await new Promise(resolve => setTimeout(resolve, 100));
         }
-        // For subsequent pages, just throw the error
-        throw error;
     }
+
+    return allActivities;
 }
 
 /**
@@ -968,6 +933,53 @@ export interface GetAllActivitiesParams {
     before?: number; // epoch timestamp in seconds
     after?: number; // epoch timestamp in seconds
     onProgress?: (fetched: number, page: number) => void;
+}
+
+interface GetActivitiesPageParams {
+    page?: number;
+    perPage?: number;
+    before?: number;
+    after?: number;
+}
+
+export async function getActivitiesPage(
+    accessToken: string,
+    params: GetActivitiesPageParams = {},
+): Promise<any[]> {
+    if (!accessToken) {
+        throw new Error("Strava access token is required.");
+    }
+
+    const page = params.page ?? 1;
+    const perPage = params.perPage ?? 200;
+    const queryParams: Record<string, any> = {
+        page,
+        per_page: perPage,
+    };
+
+    if (params.before !== undefined) queryParams.before = params.before;
+    if (params.after !== undefined) queryParams.after = params.after;
+
+    try {
+        const response = await stravaApi.get<unknown>("athlete/activities", {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            params: queryParams,
+        });
+
+        const validationResult = StravaActivitiesResponseSchema.safeParse(response.data);
+
+        if (!validationResult.success) {
+            console.error(`Strava API response validation failed (getAllActivities page ${page}):`, validationResult.error);
+            throw new Error(`Invalid data format received from Strava API: ${validationResult.error.message}`);
+        }
+
+        return validationResult.data;
+    } catch (error) {
+        return await handleApiError<any[]>(error, `getAllActivities page ${page}`, async () => {
+            const newToken = process.env.STRAVA_ACCESS_TOKEN!;
+            return getActivitiesPage(newToken, params);
+        });
+    }
 }
 
 /**

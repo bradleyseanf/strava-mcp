@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 
 import { getAthleteProfile } from "./tools/getAthleteProfile.js";
 import { getAthleteStatsTool } from "./tools/getAthleteStats.js";
@@ -36,12 +37,69 @@ type ToolDefinition = {
     execute: (...args: any[]) => any;
 };
 
+const GenericToolOutputSchema: any = {
+    summary: z.string(),
+    isError: z.boolean(),
+    contentCount: z.number().int().nonnegative(),
+};
+
+function summarizeToolResult(toolName: string, result: any): string {
+    if (typeof result?.structuredContent?.summary === "string" && result.structuredContent.summary.trim()) {
+        return result.structuredContent.summary.trim();
+    }
+
+    const content = Array.isArray(result?.content) ? result.content : [];
+    const textItems = content
+        .filter((item: any) => item?.type === "text" && typeof item.text === "string")
+        .map((item: any) => item.text.trim())
+        .filter(Boolean);
+
+    if (textItems.length > 0) {
+        const firstText = textItems.join("\n\n").trim();
+        return firstText.length > 220 ? `${firstText.slice(0, 217)}...` : firstText;
+    }
+
+    if (result?.isError) {
+        return `${toolName} failed`;
+    }
+
+    return `${toolName} completed`;
+}
+
+function normalizeToolResult(toolName: string, result: any): any {
+    if (!result || typeof result !== "object") {
+        const text = String(result);
+        return {
+            content: [{ type: "text", text }],
+            structuredContent: {
+                summary: text.length > 220 ? `${text.slice(0, 217)}...` : text,
+                isError: false,
+                contentCount: 1,
+            },
+        };
+    }
+
+    const contentCount = Array.isArray(result.content) ? result.content.length : 0;
+    const normalized = { ...result };
+    normalized.structuredContent = {
+        summary: summarizeToolResult(toolName, result),
+        isError: Boolean(result.isError),
+        contentCount,
+    };
+    return normalized;
+}
+
 function registerTool(server: McpServer, tool: ToolDefinition): void {
-    server.tool(
+    const inputSchema = tool.inputSchema?.shape;
+    const registerToolFn = server.registerTool as any;
+    registerToolFn(
         tool.name,
-        tool.description,
-        tool.inputSchema?.shape ?? {},
-        tool.execute,
+        {
+            description: tool.description,
+            inputSchema: inputSchema ?? {},
+            outputSchema: GenericToolOutputSchema,
+        },
+        async (args: any, extra: any) => normalizeToolResult(tool.name, await tool.execute(args, extra)),
     );
 }
 

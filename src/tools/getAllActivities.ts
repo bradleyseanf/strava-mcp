@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getAllActivities as fetchAllActivities } from "../stravaClient.js";
+import { getActivitiesPage as fetchActivitiesPage } from "../stravaClient.js";
 
 // Common activity types
 export const ACTIVITY_TYPES = {
@@ -143,22 +143,16 @@ export const getAllActivities = {
             let currentPage = 1;
             let hasMore = true;
 
-            // Progress callback
-            const onProgress = (fetched: number, page: number) => {
-                console.error(`  Page ${page}: Fetched ${fetched} total activities...`);
-            };
-
             // Fetch activities page by page
             while (hasMore && apiCalls < maxApiCalls && filteredActivities.length < maxActivities) {
                 apiCalls++;
                 
                 // Fetch a page of activities
-                const pageActivities = await fetchAllActivities(token, {
+                const pageActivities = await fetchActivitiesPage(token, {
                     page: currentPage,
                     perPage,
                     before,
                     after,
-                    onProgress
                 });
 
                 // Check if we got any activities
@@ -169,6 +163,7 @@ export const getAllActivities = {
 
                 // Add to all activities
                 allActivities.push(...pageActivities);
+                console.error(`  Page ${currentPage}: Fetched ${allActivities.length} total activities...`);
 
                 // Apply filters if specified
                 let toFilter = pageActivities;
@@ -195,11 +190,9 @@ export const getAllActivities = {
                 filteredActivities.push(...toFilter);
 
                 // Check if we should continue
+                console.error(`  After page ${currentPage}: ${allActivities.length} fetched, ${filteredActivities.length} match filters`);
                 hasMore = pageActivities.length === perPage;
                 currentPage++;
-
-                // Log progress
-                console.error(`  After page ${currentPage - 1}: ${allActivities.length} fetched, ${filteredActivities.length} match filters`);
             }
 
             // Limit results to maxActivities
