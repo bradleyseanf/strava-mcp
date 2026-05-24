@@ -127,10 +127,20 @@ const baseStyles = `
     }
 `;
 
+function routePath(basePath: string, suffix: string): string {
+    const cleanBase = basePath.replace(/\/+$/, "");
+    if (!suffix) {
+        return cleanBase || "/";
+    }
+
+    const cleanSuffix = suffix.startsWith("/") ? suffix : `/${suffix}`;
+    return `${cleanBase}${cleanSuffix}` || cleanSuffix;
+}
+
 /**
  * Setup page - form for entering Client ID and Client Secret
  */
-export function setupPage(error?: string): string {
+export function setupPage(error?: string, basePath = ""): string {
     const errorHtml = error ? `<div class="error-message">${escapeHtml(error)}</div>` : '';
     
     return `<!DOCTYPE html>
@@ -147,7 +157,7 @@ export function setupPage(error?: string): string {
         <h1>Connect to Strava</h1>
         <p>Enter your Strava API credentials to connect your account.</p>
         ${errorHtml}
-        <form method="POST" action="/setup">
+        <form method="POST" action="${routePath(basePath, "/setup")}">
             <div class="form-group">
                 <label for="clientId">Client ID</label>
                 <input type="text" id="clientId" name="clientId" placeholder="Your Strava Client ID" required>
@@ -203,7 +213,7 @@ export function successPage(athleteName?: string): string {
 /**
  * Error page - shown when something goes wrong
  */
-export function errorPage(message: string, details?: string): string {
+export function errorPage(message: string, details?: string, basePath = ""): string {
     const detailsHtml = details ? `<p class="help-text">${escapeHtml(details)}</p>` : '';
     
     return `<!DOCTYPE html>
@@ -220,7 +230,7 @@ export function errorPage(message: string, details?: string): string {
         <h1>Connection Failed</h1>
         <div class="error-message">${escapeHtml(message)}</div>
         ${detailsHtml}
-        <button onclick="window.location.href='/setup?reset=true'">Try Again</button>
+        <button onclick="window.location.href='${routePath(basePath, "/setup?reset=true")}'">Try Again</button>
     </div>
 </body>
 </html>`;
@@ -266,7 +276,7 @@ export function waitingPage(): string {
  * Credentials exist page - shown when credentials are already saved
  * Offers to continue with existing credentials or re-enter them
  */
-export function credentialsExistPage(clientId: string): string {
+export function credentialsExistPage(clientId: string, basePath = ""): string {
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -303,8 +313,8 @@ export function credentialsExistPage(clientId: string): string {
         <h1>Connect to Strava</h1>
         <p>You already have saved API credentials.</p>
         <div class="credential-info">Client ID: ${escapeHtml(clientId)}</div>
-        <button onclick="window.location.href='/auth'">Continue to Strava →</button>
-        <button class="btn-secondary" onclick="window.location.href='/setup?reset=true'">Re-enter credentials</button>
+        <button onclick="window.location.href='${routePath(basePath, "/auth")}'">Continue to Strava →</button>
+        <button class="btn-secondary" onclick="window.location.href='${routePath(basePath, "/setup?reset=true")}'">Re-enter credentials</button>
     </div>
 </body>
 </html>`;

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { loadConfig, hasValidTokens, hasClientCredentials, getConfigPath } from '../config.js';
 import { startAuthServer, getAuthUrl } from '../auth/server.js';
 import { getAuthenticatedAthlete } from '../stravaClient.js';
+import { loadRuntimeConfig, joinUrl } from '../runtime.js';
 
 // Dynamic import for 'open' package (ESM)
 async function openBrowser(url: string): Promise<void> {
@@ -22,6 +23,7 @@ export const connectStravaTool = {
     }),
     execute: async (args: { force?: boolean }): Promise<{ content: Array<{ type: 'text'; text: string }> }> => {
         const { force = false } = args;
+        const runtime = loadRuntimeConfig();
         
         try {
             // Check if already authenticated
@@ -42,6 +44,16 @@ export const connectStravaTool = {
                         // Token might be expired, continue to re-auth
                     }
                 }
+            }
+
+            if (runtime.publicBaseUrl) {
+                const setupUrl = joinUrl(runtime.publicBaseUrl, "/strava/setup").toString();
+                return {
+                    content: [{
+                        type: 'text' as const,
+                        text: `✅ Open this link in a browser to connect Strava:\n\n${setupUrl}\n\nAfter you authorize Strava, come back here and ask again.`,
+                    }],
+                };
             }
             
             // Start the auth flow

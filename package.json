@@ -27,6 +27,7 @@
     "dev": "tsx src/server.ts",
     "lint": "eslint . --ext .ts",
     "setup-auth": "tsx scripts/setup-auth.ts",
+    "reset-strava": "tsx scripts/reset-strava.ts",
     "test": "vitest run",
     "test:api": "RUN_API_TESTS=true vitest run tests/getActivityStreams.api.test.ts",
     "test:mcp": "tsx scripts/test-mcp-endpoint.ts",

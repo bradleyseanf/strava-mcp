@@ -25,13 +25,14 @@ async function promptUser(question: string): Promise<string> {
   return answer.trim();
 }
 
-async function loadEnv(): Promise<{ clientId?: string; clientSecret?: string }> {
+async function loadEnv(): Promise<{ clientId?: string; clientSecret?: string; redirectUri?: string }> {
   try {
     await fs.access(envPath); // Check if .env exists
     const envConfig = dotenv.parse(await fs.readFile(envPath));
     return {
       clientId: envConfig.STRAVA_CLIENT_ID,
       clientSecret: envConfig.STRAVA_CLIENT_SECRET,
+      redirectUri: envConfig.STRAVA_REDIRECT_URI,
     };
   } catch (error) {
     console.log('.env file not found or not readable. Will prompt for all values.');
@@ -78,6 +79,7 @@ async function main() {
   const existingEnv = await loadEnv();
   let clientId = existingEnv.clientId;
   let clientSecret = existingEnv.clientSecret;
+  const redirectUri = existingEnv.redirectUri || process.env.STRAVA_REDIRECT_URI || 'http://localhost';
 
   if (!clientId) {
     clientId = await promptUser('Enter your Strava Application Client ID: ');
@@ -100,12 +102,19 @@ async function main() {
   }
 
 
-  const authUrl = `https://www.strava.com/oauth/authorize?client_id=${clientId}&response_type=code&redirect_uri=${REDIRECT_URI}&approval_prompt=force&scope=${REQUIRED_SCOPES}`;
+  const authUrl = new URL('https://www.strava.com/oauth/authorize');
+  authUrl.search = new URLSearchParams({
+    client_id: clientId,
+    response_type: 'code',
+    redirect_uri: redirectUri,
+    approval_prompt: 'force',
+    scope: REQUIRED_SCOPES,
+  }).toString();
 
   console.log('\nStep 1: Authorize Application');
   console.log('Please visit the following URL in your browser:');
   console.log(`\n${authUrl}\n`);
-  console.log(`After authorizing, Strava will redirect you to ${REDIRECT_URI}.`);
+  console.log(`After authorizing, Strava will redirect you to ${redirectUri}.`);
   console.log('Copy the \'code\' value from the URL in your browser\'s address bar.');
   console.log('(e.g., http://localhost/?state=&code=THIS_PART&scope=...)');
 

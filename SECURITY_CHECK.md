@@ -21,6 +21,5 @@ What it verifies:
 
 Notes:
 
-- `STRAVA_ACCESS_TOKEN` and `STRAVA_REFRESH_TOKEN` are optional bootstrap inputs.
+- `STRAVA_REFRESH_TOKEN` is an optional bootstrap input.
 - The old localhost Strava bootstrap helpers are retained only for local development and are not the production path.
-

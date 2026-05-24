@@ -32,11 +32,17 @@
           "is_secret": true
         },
         {
-          "name": "STRAVA_ACCESS_TOKEN",
-          "description": "Your Strava API access token",
-          "is_required": true,
+          "name": "STRAVA_REFRESH_TOKEN",
+          "description": "Optional bootstrap Strava refresh token",
+          "is_required": false,
           "format": "string",
           "is_secret": true
+        },
+        {
+          "name": "STRAVA_REDIRECT_URI",
+          "description": "Optional Strava OAuth redirect URI for the browser connect flow",
+          "is_required": false,
+          "format": "string",
         }
       ]
     }

@@ -11,15 +11,20 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
-import { loadConfig, saveConfig } from "./config.js";
+import { clearConfig, hasClientCredentials, loadConfig, saveClientCredentials, saveConfig } from "./config.js";
 import { registerStravaTools } from "./mcpTools.js";
 import { loadRuntimeConfig, assertHttpsPublicUrl } from "./runtime.js";
 import { PersonalOAuthProvider } from "./auth/provider.js";
 import { refreshAccessToken } from "./stravaClient.js";
+import { requestStravaOAuthToken } from "./stravaOAuth.js";
 import type { PendingAuthorizationContext } from "./auth/provider.js";
 import {
     chatgptLoginErrorPage,
     chatgptLoginPage,
+    credentialsExistPage,
+    errorPage,
+    setupPage,
+    successPage,
 } from "./auth/pages.js";
 import {
     createSessionCookie,
@@ -135,13 +140,11 @@ async function persistBootstrapConfig(config: Awaited<ReturnType<typeof loadRunt
     const bootstrapConfig = {
         clientId: config.stravaClientId,
         clientSecret: config.stravaClientSecret,
-        accessToken: config.stravaAccessToken,
         refreshToken: config.stravaRefreshToken,
     };
     if (
         bootstrapConfig.clientId ||
         bootstrapConfig.clientSecret ||
-        bootstrapConfig.accessToken ||
         bootstrapConfig.refreshToken
     ) {
         await saveConfig(bootstrapConfig);
@@ -156,6 +159,21 @@ function routePath(basePath: string, suffix: string): string {
 
     const cleanSuffix = suffix.startsWith("/") ? suffix : `/${suffix}`;
     return `${cleanBase}${cleanSuffix}` || cleanSuffix;
+}
+
+function buildPublicUrl(baseUrl: URL, path: string): string {
+    return `${baseUrl.origin}${path}`;
+}
+
+function buildStravaAuthorizeUrl(clientId: string, redirectUri: string): string {
+    const params = new URLSearchParams({
+        client_id: clientId,
+        response_type: "code",
+        redirect_uri: redirectUri,
+        approval_prompt: "force",
+        scope: "profile:read_all,activity:read_all,activity:read,profile:write",
+    });
+    return `https://www.strava.com/oauth/authorize?${params.toString()}`;
 }
 
 function parsePendingAuthorization(form: LoginFormInput): PendingAuthorizationContext | null {
@@ -226,6 +244,11 @@ async function startRemoteServer(
     const rootAuthMountPath = routePath(runtime.publicBasePath, "");
     const authMountPath = routePath(runtime.publicBasePath, "/auth");
     const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(runtime.publicBaseUrl!);
+    const stravaRootPath = routePath(runtime.publicBasePath, "/strava");
+    const stravaSetupPath = routePath(stravaRootPath, "/setup");
+    const stravaAuthPath = routePath(stravaRootPath, "/auth");
+    const stravaCallbackPath = routePath(stravaRootPath, "/callback");
+    const stravaRedirectUri = process.env.STRAVA_REDIRECT_URI?.trim() || buildPublicUrl(runtime.publicBaseUrl!, stravaCallbackPath);
 
     app.set("trust proxy", 1);
     app.use(helmet({ contentSecurityPolicy: false }));
@@ -241,6 +264,104 @@ async function startRemoteServer(
     if (authMountPath !== rootAuthMountPath) {
         app.use(authMountPath, mcpAuthRouter(authRouterOptions));
     }
+
+    app.get(stravaRootPath, (_req, res) => {
+        res.redirect(302, stravaSetupPath);
+    });
+
+    app.get(stravaSetupPath, async (req, res) => {
+        if (req.query.reset === "true") {
+            await clearConfig();
+        }
+
+        const config = await loadConfig();
+        res.setHeader("Cache-Control", "no-store");
+
+        if (hasClientCredentials(config)) {
+            res.status(200).type("html").send(credentialsExistPage(config.clientId!, stravaRootPath));
+            return;
+        }
+
+        res.status(200).type("html").send(setupPage(undefined, stravaRootPath));
+    });
+
+    app.post(stravaSetupPath, async (req, res) => {
+        const clientId = String(req.body.clientId ?? "").trim();
+        const clientSecret = String(req.body.clientSecret ?? "").trim();
+
+        if (!clientId || !clientSecret) {
+            res.status(200).type("html").send(setupPage("Please enter both Client ID and Client Secret.", stravaRootPath));
+            return;
+        }
+
+        await saveClientCredentials(clientId, clientSecret);
+        res.redirect(302, stravaAuthPath);
+    });
+
+    app.get(stravaAuthPath, async (_req, res) => {
+        const config = await loadConfig();
+        if (!hasClientCredentials(config)) {
+            res.redirect(302, stravaSetupPath);
+            return;
+        }
+
+        const authUrl = buildStravaAuthorizeUrl(config.clientId!, stravaRedirectUri);
+        res.redirect(302, authUrl);
+    });
+
+    app.get(stravaCallbackPath, async (req, res) => {
+        const error = String(req.query.error ?? "").trim();
+        const code = String(req.query.code ?? "").trim();
+
+        if (error) {
+            await clearConfig();
+            res.status(200).type("html").send(errorPage("Authorization denied", error, stravaRootPath));
+            return;
+        }
+
+        if (!code) {
+            await clearConfig();
+            res.status(200).type("html").send(errorPage("No authorization code received", undefined, stravaRootPath));
+            return;
+        }
+
+        try {
+            const config = await loadConfig();
+            if (!config.clientId || !config.clientSecret) {
+                throw new Error("Missing Strava client credentials.");
+            }
+
+            const tokenResponse = await requestStravaOAuthToken({
+                clientId: config.clientId,
+                clientSecret: config.clientSecret,
+                code,
+                grantType: "authorization_code",
+            });
+
+            const { access_token, refresh_token, expires_at, athlete } = tokenResponse;
+            if (!access_token || !refresh_token) {
+                throw new Error("Strava did not return access and refresh tokens.");
+            }
+
+            await saveConfig({
+                clientId: config.clientId,
+                clientSecret: config.clientSecret,
+                accessToken: access_token,
+                refreshToken: refresh_token,
+                expiresAt: expires_at,
+            });
+
+            process.env.STRAVA_ACCESS_TOKEN = access_token;
+            process.env.STRAVA_REFRESH_TOKEN = refresh_token;
+
+            const athleteName = athlete ? `${String(athlete.firstname ?? "").trim()} ${String(athlete.lastname ?? "").trim()}`.trim() || undefined : undefined;
+            res.status(200).type("html").send(successPage(athleteName));
+        } catch (error) {
+            await clearConfig();
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            res.status(200).type("html").send(errorPage("Failed to exchange authorization code", errorMsg, stravaRootPath));
+        }
+    });
 
     app.get(healthPath, (_req, res) => {
         res.setHeader("Cache-Control", "no-store");
@@ -314,7 +435,7 @@ async function startRemoteServer(
         const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: undefined,
         });
-        const mcpServer = buildMcpServer(version, false);
+        const mcpServer = buildMcpServer(version, true);
         const cleanup = () => {
             void transport.close();
             void mcpServer.close();
@@ -369,7 +490,7 @@ async function startRemoteServer(
         return async (_req, res) => {
             const transport = new SSEServerTransport(endpointPath, res);
             const sessionId = transport.sessionId;
-            const mcpServer = buildMcpServer(version, false);
+            const mcpServer = buildMcpServer(version, true);
             let cleanedUp = false;
 
             const cleanup = () => {

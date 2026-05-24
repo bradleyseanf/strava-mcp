@@ -62,7 +62,7 @@ function resolveSecretStorePath(rawPath?: string): string {
     return path.join(expanded, "secrets.enc.json");
 }
 
-function joinUrl(baseUrl: URL, suffixPath: string): URL {
+export function joinUrl(baseUrl: URL, suffixPath: string): URL {
     const url = new URL(baseUrl.toString());
     const basePath = normalizeBasePath(url.pathname);
     const cleanSuffix = suffixPath.startsWith("/") ? suffixPath : `/${suffixPath}`;
